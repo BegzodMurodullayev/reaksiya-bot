@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reaction Master Dashboard</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f7f6;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 20px 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+        }
+        .status-bar {
+            background: #ecf0f1;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            font-weight: bold;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #3498db;
+            color: white;
+        }
+        tr:hover {
+            background-color: #f1f1f1;
+        }
+        .active {
+            color: #27ae60;
+            font-weight: bold;
+        }
+        .offline {
+            color: #e74c3c;
+            font-weight: bold;
+        }
+        .db-ok { color: #27ae60; }
+        .db-fail { color: #e74c3c; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Reaction Master Dashboard</h1>
+        
+        <div class="status-bar">
+            <span>Database Status: <span class="{% if db_status == 'Connected' %}db-ok{% else %}db-fail{% endif %}">{{ db_status }}</span></span>
+            <span>Total Bots: {{ workers|length }}</span>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Bot Username</th>
+                    <th>Status</th>
+                    <th>Linked Channels</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for worker in workers %}
+                <tr>
+                    <td>@{{ worker.username }}</td>
+                    <td class="{{ worker.status_class }}">{{ worker.status }}</td>
+                    <td>{{ worker.channels }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="3" style="text-align: center;">No bots added yet.</td>
+                </tr>
+                {% endendfor %}
+            </tbody>
+        </table>
+
+        <h2 style="margin-top: 40px;">📥 Recent Bulk Imports</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Status</th>
+                    <th>Total</th>
+                    <th>Success</th>
+                    <th>Failed</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in bulk_logs %}
+                <tr>
+                    <td>{{ log.date }}</td>
+                    <td>
+                        {% if log.status == 'completed' %}<span style="color: #27ae60; font-weight: bold;">Completed</span>
+                        {% elif log.status == 'failed' %}<span style="color: #e74c3c; font-weight: bold;">Failed</span>
+                        {% elif log.status == 'running' %}<span style="color: #f39c12; font-weight: bold;">Running...</span>
+                        {% else %}<span>{{ log.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ log.total }}</td>
+                    <td style="color: #27ae60;">{{ log.success }}</td>
+                    <td style="color: #e74c3c;">{{ log.failed }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" style="text-align: center;">No bulk imports yet.</td>
+                </tr>
+                {% endendfor %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>

@@ -36,7 +36,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # ─────────────────────────────────────────
 from dotenv import load_dotenv
 
-env_path = os.path.join(SCRIPT_DIR, "..", "reaksiya_bot", ".env")
+env_path = os.path.join(SCRIPT_DIR, "..", ".env")
 load_dotenv(env_path)
 
 API_ID     = int(os.getenv("API_ID", "0"))

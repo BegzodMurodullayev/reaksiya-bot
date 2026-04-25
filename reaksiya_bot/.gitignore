@@ -1,8 +1,0 @@
-.env
-__pycache__/
-*.py[cod]
-*$py.class
-.venv/
-venv/
-env/
-created_tokens.txt

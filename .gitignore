@@ -6,13 +6,3 @@ __pycache__/
 venv/
 env/
 created_tokens.txt
-results.txt
-sessionbase/
-**/session_string*.txt
-**/created_tokens.txt
-**/results.txt
-*.session
-*.session-journal
-**/.env
-reaksiya_bot/created_tokens.txt
-reaksiya_bot/results.txt

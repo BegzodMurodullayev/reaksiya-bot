@@ -2,11 +2,11 @@
 config.py — Pydantic Settings for Telegram Reaction Master
 """
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
+import os
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     # Telegram
     MASTER_TOKEN: str
     OWNER_ID: int
+    API_ID: int = 0
+    API_HASH: str = ""
 
     # Database
     DATABASE_URL: str

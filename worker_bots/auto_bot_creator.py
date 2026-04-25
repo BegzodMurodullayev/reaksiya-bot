@@ -28,12 +28,20 @@ except ImportError:
 #  SOZLAMALAR
 # ════════════════════════════════════════════════
 
-API_ID   = 32003716
-API_HASH = "fa740b9dfde98b4dc6e541d66f665815"
-
+from dotenv import load_dotenv
+import sys
 import os
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+env_path = os.path.join(SCRIPT_DIR, "..", "reaksiya_bot", ".env")
+load_dotenv(env_path)
+
+API_ID     = int(os.getenv("API_ID", "0"))
+API_HASH   = os.getenv("API_HASH", "")
+
+if not API_ID or not API_HASH:
+    print("❌ Xato: .env faylidan API_ID yoki API_HASH topilmadi!")
+    sys.exit(1)
 
 # ── Akkauntlar ro'yxati ───────────────────────────────────────────────────────
 # Xohlagancha akkaunt qo'shish mumkin! Har biri uchun alohida session fayli.

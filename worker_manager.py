@@ -41,7 +41,7 @@ async def execute_reaction_task(
     reaction_emoji: str,
     task_log_id: int,
 ):
-    delay = random.uniform(5, 45)
+    delay = random.uniform(2, 3)
     logger.info(
         "Worker %s waiting %.2fs before reacting %s on msg %s in chat %s.",
         worker_id,

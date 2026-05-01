@@ -39,7 +39,7 @@ def bulk_method_kb():
 
 async def _check_owner(event: types.Message | CallbackQuery) -> bool:
     user = getattr(event, "from_user", None)
-    if user is None or user.id != settings.OWNER_ID:
+    if user is None or user.id not in settings.admin_ids_list:
         if isinstance(event, CallbackQuery):
             await event.answer("Sizda ruxsat yo'q.", show_alert=True)
         else:

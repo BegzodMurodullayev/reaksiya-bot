@@ -269,7 +269,7 @@ async def register_worker(master_bot: Bot, token: str) -> dict[str, Any]:
     promoted_count = 0
     pending_titles: list[str] = []
     skipped_titles: list[str] = []
-    for _, telegram_chat_id, title in chat_refs:
+    for chat_db_id, telegram_chat_id, title in chat_refs:
         chat_info = await inspect_target_chat(master_bot, telegram_chat_id)
         if not chat_info["ok"]:
             skipped_titles.append(f"{title}: {chat_info['reason']}")
@@ -295,6 +295,15 @@ async def register_worker(master_bot: Bot, token: str) -> dict[str, Any]:
         )
         if promoted:
             promoted_count += 1
+            async with get_session() as session:
+                cw = (await session.execute(
+                    select(ChannelWorker).where(
+                        ChannelWorker.channel_id == chat_db_id,
+                        ChannelWorker.worker_id == worker_id
+                    )
+                )).scalar_one_or_none()
+                if cw:
+                    cw.is_admin = True
         elif error_text and any(
             marker in error_text.lower()
             for marker in ("not enough rights", "not a member", "participant", "user not found")
@@ -388,6 +397,15 @@ async def sync_workers_for_channel(master_bot: Bot, channel_db_id: int) -> dict[
         )
         if promoted:
             promoted_count += 1
+            async with get_session() as session:
+                cw = (await session.execute(
+                    select(ChannelWorker).where(
+                        ChannelWorker.channel_id == channel_db_id,
+                        ChannelWorker.worker_id == worker.id
+                    )
+                )).scalar_one_or_none()
+                if cw:
+                    cw.is_admin = True
         elif error_text and any(
             marker in error_text.lower()
             for marker in ("not enough rights", "not a member", "participant", "user not found")

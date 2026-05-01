@@ -10,7 +10,8 @@ from sqlalchemy.orm import selectinload
 
 from bot_registry import DEFAULT_REACTIONS
 from database import get_session
-from models import Channel, TaskLog, Worker
+from sqlalchemy import select
+from models import Channel, TaskLog, Worker, ChannelWorker
 
 logger = logging.getLogger(__name__)
 
@@ -85,13 +86,14 @@ async def execute_reaction_task(
                 await asyncio.sleep(wait_seconds)
             except Exception as exc:
                 error_text = str(exc).lower()
-                logger.warning(
-                    "Worker %s failed to react on message %s (attempt %s): %s",
-                    worker_id,
-                    message_id,
-                    attempt,
-                    exc,
-                )
+                if "message_id_invalid" not in error_text and "chat not found" not in error_text:
+                    logger.warning(
+                        "Worker %s failed to react on message %s (attempt %s): %s",
+                        worker_id,
+                        message_id,
+                        attempt,
+                        exc,
+                    )
 
                 if any(marker in error_text for marker in ("unauthorized", "invalid token", "token is invalid")):
                     invalid_token = True
@@ -131,8 +133,17 @@ async def schedule_reactions(channel_db_id: int, telegram_channel_id: int, messa
             logger.warning("Channel %s not found or inactive. Cannot schedule reactions.", channel_db_id)
             return
 
+        cw_stmt = select(ChannelWorker.worker_id).where(
+            ChannelWorker.channel_id == channel_db_id,
+            ChannelWorker.is_admin == True
+        )
+        admin_worker_ids = (await session.execute(cw_stmt)).scalars().all()
+
         available_emojis = (channel.reactions or []) or DEFAULT_REACTIONS.copy()
-        active_workers: List[Worker] = [worker for worker in channel.workers if worker.is_active]
+        active_workers: List[Worker] = [
+            worker for worker in channel.workers 
+            if worker.is_active and worker.id in admin_worker_ids
+        ]
 
         if not active_workers:
             logger.info("No active workers found for chat %s.", telegram_channel_id)

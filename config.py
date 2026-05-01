@@ -11,11 +11,21 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Telegram
     MASTER_TOKEN: str
     OWNER_ID: int
+    ADMIN_IDS: str = ""
     API_ID: int = 0
     API_HASH: str = ""
+
+    @property
+    def admin_ids_list(self) -> list[int]:
+        ids = {self.OWNER_ID}
+        if self.ADMIN_IDS:
+            for x in self.ADMIN_IDS.split(","):
+                x = x.strip()
+                if x.isdigit() or (x.startswith("-") and x[1:].isdigit()):
+                    ids.add(int(x))
+        return list(ids)
 
     # Database
     DATABASE_URL: str

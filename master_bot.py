@@ -95,6 +95,9 @@ def channel_detail_kb(channel_id: int, is_active: bool):
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
+                InlineKeyboardButton(text="🤖 Avto-Admin (Botlarni qo'shish)", callback_data=f"auto_admin_channel:{channel_id}")
+            ],
+            [
                 InlineKeyboardButton(text="Reaksiyani o'zgartirish", callback_data=f"edit_reactions:{channel_id}"),
                 InlineKeyboardButton(text="Worker sync", callback_data=f"sync_channel:{channel_id}"),
             ],
@@ -127,7 +130,7 @@ def settings_menu_kb():
 
 async def check_owner(message_or_callback) -> bool:
     user = getattr(message_or_callback, "from_user", None)
-    if user is None or user.id != settings.OWNER_ID:
+    if user is None or user.id not in settings.admin_ids_list:
         if isinstance(message_or_callback, types.Message):
             await message_or_callback.answer("Sizda ruxsat yo'q.")
         else:
@@ -262,6 +265,19 @@ async def _track_chat(bot: Bot, state: FSMContext, message: types.Message, react
 
     sync_result = await sync_workers_for_channel(bot, channel_db_id)
     pending = sync_result.get("pending_usernames", [])
+    
+    # Auto-admin tekshiruvi
+    auto_admin_msg = ""
+    async with get_session() as session:
+        from models import AppSetting
+        setting = await session.get(AppSetting, "auto_admin_session")
+        if setting and setting.value and "username" in setting.value:
+            auto_admin_msg = (
+                f"\n\n🤖 Avto-Admin sozlanmagan botlarni avtomat qo'shishi uchun "
+                f"Iltimos @{setting.value['username']} akkauntini kanalga admin qiling va "
+                f"kanal menyusidan 'Avto-Admin' tugmasini bosing."
+            )
+
     text = (
         f"{'Yangi chat ulandi.' if created else 'Chat yangilandi.'}\n"
         f"Nomi: {title}\n"
@@ -277,6 +293,8 @@ async def _track_chat(bot: Bot, state: FSMContext, message: types.Message, react
         text += f"\n\nEslatma: {sync_result['warning']}"
     elif warning:
         text += f"\n\nEslatma: {warning}"
+        
+    text += auto_admin_msg
 
     await message.answer(text, reply_markup=main_menu_kb())
     await state.clear()
@@ -499,6 +517,32 @@ async def sync_channel_workers_handler(callback: CallbackQuery, bot: Bot):
     await render_channel_detail(callback, channel_id)
 
 
+@dp.callback_query(F.data.startswith("auto_admin_channel:"))
+async def auto_admin_channel_handler(callback: CallbackQuery):
+    if not await check_owner(callback):
+        return
+    channel_id = int(callback.data.split(":", 1)[1])
+    await callback.answer("Avto-Admin jarayoni boshlandi, bu biroz vaqt olishi mumkin...", show_alert=True)
+    
+    from auto_admin_service import auto_promote_workers_for_channel
+    result = await auto_promote_workers_for_channel(channel_id)
+    
+    if not result["ok"]:
+        await callback.message.answer(f"❌ Xatolik: {result['error']}")
+    else:
+        text = (
+            f"✅ Avto-Admin jarayoni yakunlandi.\n"
+            f"Jami botlar: {result['total']}\n"
+            f"Muvaffaqiyatli: {result['ok_count']}\n"
+            f"Xato: {result['fail_count']}"
+        )
+        if result['errors']:
+            text += "\n\nBa'zi xatolar:\n" + "\n".join(result['errors'])
+        await callback.message.answer(text)
+        
+    await render_channel_detail(callback, channel_id)
+
+
 @dp.message(F.text == "🤖 Botlar")
 @dp.message(Command("botlar"))
 async def show_bots(event: types.Message):
@@ -639,3 +683,52 @@ async def handle_group_message(message: types.Message):
     if message.from_user and message.from_user.is_bot:
         return
     await _schedule_for_tracked_chat(message.chat.id, message.message_id)
+
+
+@dp.message(F.chat.type == "private")
+async def handle_private_manual_reaction(message: types.Message, bot: Bot):
+    if not await check_owner(message):
+        return
+        
+    chat_id = None
+    message_id = None
+    
+    # 1. Forward tekshiruvi
+    if message.forward_origin and message.forward_origin.type == "channel":
+        chat_id = message.forward_origin.chat.id
+        message_id = message.forward_origin.message_id
+    elif message.forward_from_chat and message.forward_from_chat.type == "channel":
+        chat_id = message.forward_from_chat.id
+        message_id = getattr(message, "forward_from_message_id", None)
+    
+    # 2. Matn ichidan link izlash (https://t.me/kanal_nomi/123 yoki t.me/c/123/456)
+    if not chat_id and message.text:
+        import re
+        match = re.search(r"t\.me/(c/)?([^/]+)/(\d+)", message.text)
+        if match:
+            is_private_c = match.group(1)
+            chat_ref = match.group(2)
+            message_id = int(match.group(3))
+            
+            if is_private_c:
+                chat_id = int(f"-100{chat_ref}")
+            else:
+                try:
+                    chat = await bot.get_chat(f"@{chat_ref}")
+                    chat_id = chat.id
+                except Exception:
+                    await message.answer("Bunday kanal topilmadi. Kanal @username si to'g'riligiga ishonch hosil qiling.")
+                    return
+
+    if chat_id and message_id:
+        async with get_session() as session:
+            channel = (await session.execute(
+                select(Channel).where(Channel.channel_id == chat_id)
+            )).scalar_one_or_none()
+            
+            if not channel or not channel.is_active:
+                await message.answer("Bu kanal bazada yo'q yoki aktiv emas. Oldin kanalni ulab qo'ying.")
+                return
+                
+            await schedule_reactions(channel.id, chat_id, message_id)
+            await message.answer(f"✅ Ushbu xabarga (ID: {message_id}) reaksiyalar rejalashtirildi!")

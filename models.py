@@ -18,6 +18,7 @@ class ChannelWorker(Base):
     worker_id: Mapped[int] = mapped_column(
         ForeignKey("workers.id", ondelete="CASCADE"), primary_key=True
     )
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class Channel(Base):

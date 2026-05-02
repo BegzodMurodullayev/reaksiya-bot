@@ -30,7 +30,7 @@ from bulk_import_service import process_bulk_import_from_file
 from config import settings
 from database import get_session
 from handlers.bulk_add_handler import bulk_router
-from models import BulkImportLog, Channel, TaskLog, Worker
+from models import BulkImportLog, Channel, ChannelWorker, TaskLog, Worker
 from worker_manager import schedule_reactions
 
 logger = logging.getLogger(__name__)

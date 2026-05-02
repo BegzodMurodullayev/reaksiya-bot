@@ -278,7 +278,7 @@ async def register_worker(master_bot: Bot, token: str) -> dict[str, Any]:
             skipped_titles.append(f"{title}: {chat_info['warning']}")
             continue
 
-        worker_is_member, membership_note = await _check_worker_membership(
+        worker_is_member, membership_status = await _check_worker_membership(
             master_bot,
             telegram_chat_id,
             worker_user_id,
@@ -287,12 +287,12 @@ async def register_worker(master_bot: Bot, token: str) -> dict[str, Any]:
             pending_titles.append(title)
             continue
 
-        promoted, error_text = await _promote_worker_in_chat(
-            master_bot=master_bot,
-            chat_id=telegram_chat_id,
-            worker_user_id=worker_user_id,
-            worker_username=username,
-        )
+        if membership_status in ("administrator", "creator"):
+            promoted = True
+            error_text = None
+        else:
+            promoted = False
+            error_text = "Qo'lda admin qilinishi kutilmoqda"
         if promoted:
             promoted_count += 1
             async with get_session() as session:
@@ -384,17 +384,17 @@ async def sync_workers_for_channel(master_bot: Bot, channel_db_id: int) -> dict[
             logger.warning("Worker %s identity fetch failed during sync: %s", worker.id, exc)
             continue
 
-        worker_is_member, _ = await _check_worker_membership(master_bot, telegram_chat_id, worker_user_id)
+        worker_is_member, membership_status = await _check_worker_membership(master_bot, telegram_chat_id, worker_user_id)
         if not worker_is_member:
             pending_usernames.append(f"@{username}" if username else f"id:{worker.id}")
             continue
 
-        promoted, error_text = await _promote_worker_in_chat(
-            master_bot=master_bot,
-            chat_id=telegram_chat_id,
-            worker_user_id=worker_user_id,
-            worker_username=username,
-        )
+        if membership_status in ("administrator", "creator"):
+            promoted = True
+            error_text = None
+        else:
+            promoted = False
+            error_text = "Qo'lda admin qilinishi kutilmoqda"
         if promoted:
             promoted_count += 1
             async with get_session() as session:

@@ -95,9 +95,6 @@ def channel_detail_kb(channel_id: int, is_active: bool):
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="🤖 Avto-Admin (Botlarni qo'shish)", callback_data=f"auto_admin_channel:{channel_id}")
-            ],
-            [
                 InlineKeyboardButton(text="Reaksiyani o'zgartirish", callback_data=f"edit_reactions:{channel_id}"),
                 InlineKeyboardButton(text="Worker sync", callback_data=f"sync_channel:{channel_id}"),
             ],
@@ -266,17 +263,7 @@ async def _track_chat(bot: Bot, state: FSMContext, message: types.Message, react
     sync_result = await sync_workers_for_channel(bot, channel_db_id)
     pending = sync_result.get("pending_usernames", [])
     
-    # Auto-admin tekshiruvi
-    auto_admin_msg = ""
-    async with get_session() as session:
-        from models import AppSetting
-        setting = await session.get(AppSetting, "auto_admin_session")
-        if setting and setting.value and "username" in setting.value:
-            auto_admin_msg = (
-                f"\n\n🤖 Avto-Admin sozlanmagan botlarni avtomat qo'shishi uchun "
-                f"Iltimos @{setting.value['username']} akkauntini kanalga admin qiling va "
-                f"kanal menyusidan 'Avto-Admin' tugmasini bosing."
-            )
+    # Auto-admin tekshiruvi olib tashlandi
 
     text = (
         f"{'Yangi chat ulandi.' if created else 'Chat yangilandi.'}\n"
@@ -294,7 +281,7 @@ async def _track_chat(bot: Bot, state: FSMContext, message: types.Message, react
     elif warning:
         text += f"\n\nEslatma: {warning}"
         
-    text += auto_admin_msg
+
 
     await message.answer(text, reply_markup=main_menu_kb())
     await state.clear()
@@ -315,6 +302,81 @@ async def cmd_start(message: types.Message, state: FSMContext):
     if not await check_owner(message):
         return
     await render_main_menu(message, state)
+
+
+@dp.message(Command("sync"))
+async def cmd_sync_all(message: types.Message, bot: Bot):
+    if not await check_owner(message):
+        return
+        
+    await message.answer("Barcha kanallar uchun botlar holati yangilanmoqda. Iltimos, kuting...")
+    
+    async with get_session() as session:
+        channels = (
+            await session.execute(select(Channel).where(Channel.is_active.is_(True)))
+        ).scalars().all()
+        
+    if not channels:
+        await message.answer("Aktiv kanallar topilmadi.")
+        return
+        
+    total_promoted = 0
+    total_linked = 0
+    errors = []
+    
+    for channel in channels:
+        try:
+            result = await sync_workers_for_channel(bot, channel.id)
+            total_promoted += result.get("promoted_count", 0)
+            total_linked += result.get("linked_count", 0)
+            if result.get("warning"):
+                errors.append(f"{channel.title}: {result['warning']}")
+        except Exception as e:
+            errors.append(f"{channel.title}: xatolik - {e}")
+            
+    text = (
+        f"✅ Sinxronizatsiya tugadi!\n"
+        f"Yangi linklar: {total_linked}\n"
+        f"Admin bo'lgan workerlar: {total_promoted}\n"
+    )
+    if errors:
+        text += "\nMuammoli kanallar:\n" + "\n".join(errors[:10])
+        
+    await message.answer(text)
+
+
+@dp.message(Command("force_sync"))
+async def cmd_force_sync(message: types.Message):
+    if not await check_owner(message):
+        return
+        
+    await message.answer("Barcha botlar bazada majburiy ravishda 'Admin' qilib belgilanmoqda...")
+    
+    async with get_session() as session:
+        channels = (await session.execute(select(Channel).where(Channel.is_active.is_(True)))).scalars().all()
+        workers = (await session.execute(select(Worker).where(Worker.is_active.is_(True)))).scalars().all()
+        
+        count = 0
+        for channel in channels:
+            for worker in workers:
+                cw = (await session.execute(
+                    select(ChannelWorker).where(
+                        ChannelWorker.channel_id == channel.id,
+                        ChannelWorker.worker_id == worker.id
+                    )
+                )).scalar_one_or_none()
+                
+                if not cw:
+                    cw = ChannelWorker(channel_id=channel.id, worker_id=worker.id)
+                    session.add(cw)
+                
+                if not cw.is_admin:
+                    cw.is_admin = True
+                    count += 1
+                    
+        await session.commit()
+        
+    await message.answer(f"✅ Barcha aktiv {count} ta bot ulanishi majburiy admin qilib belgilandi! Ular endi shu zaxoti reaksiya bosishda davom etadi.")
 
 
 @dp.message(F.text == "📊 Statistika")
@@ -514,32 +576,6 @@ async def sync_channel_workers_handler(callback: CallbackQuery, bot: Bot):
     if result.get("warning"):
         text += f"\n\nEslatma: {result['warning']}"
     await callback.message.answer(text)
-    await render_channel_detail(callback, channel_id)
-
-
-@dp.callback_query(F.data.startswith("auto_admin_channel:"))
-async def auto_admin_channel_handler(callback: CallbackQuery):
-    if not await check_owner(callback):
-        return
-    channel_id = int(callback.data.split(":", 1)[1])
-    await callback.answer("Avto-Admin jarayoni boshlandi, bu biroz vaqt olishi mumkin...", show_alert=True)
-    
-    from auto_admin_service import auto_promote_workers_for_channel
-    result = await auto_promote_workers_for_channel(channel_id)
-    
-    if not result["ok"]:
-        await callback.message.answer(f"❌ Xatolik: {result['error']}")
-    else:
-        text = (
-            f"✅ Avto-Admin jarayoni yakunlandi.\n"
-            f"Jami botlar: {result['total']}\n"
-            f"Muvaffaqiyatli: {result['ok_count']}\n"
-            f"Xato: {result['fail_count']}"
-        )
-        if result['errors']:
-            text += "\n\nBa'zi xatolar:\n" + "\n".join(result['errors'])
-        await callback.message.answer(text)
-        
     await render_channel_detail(callback, channel_id)
 
 

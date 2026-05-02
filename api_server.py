@@ -14,7 +14,7 @@ templates_dir = os.path.join(os.path.dirname(__file__), "templates")
 os.makedirs(templates_dir, exist_ok=True)
 templates = Jinja2Templates(directory=templates_dir)
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health_check():
     """Endpoint for UptimeRobot to ping."""
     db_ok = await check_db_connection()

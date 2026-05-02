@@ -40,8 +40,8 @@ class Settings(BaseSettings):
     SEED_WORKERS: str = ""
 
     # DB Pool settings optimized for Render free tier
-    DB_POOL_SIZE: int = 3
-    DB_MAX_OVERFLOW: int = 5
+    DB_POOL_SIZE: int = 15
+    DB_MAX_OVERFLOW: int = 20
     DB_POOL_TIMEOUT: int = 30
     DB_POOL_RECYCLE: int = 1800  # 30 min — prevent stale connections
 

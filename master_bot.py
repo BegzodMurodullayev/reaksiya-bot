@@ -56,6 +56,11 @@ class EditStates(StatesGroup):
     waiting_for_default_reactions = State()
 
 
+class ScanStates(StatesGroup):
+    waiting_for_reference = State()
+    waiting_for_count = State()
+
+
 def main_menu_kb():
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -99,7 +104,10 @@ def channel_detail_kb(channel_id: int, is_active: bool):
                 InlineKeyboardButton(text="Worker sync", callback_data=f"sync_channel:{channel_id}"),
             ],
             [InlineKeyboardButton(text=toggle_text, callback_data=f"toggle_channel:{channel_id}")],
-            [InlineKeyboardButton(text="🗑 Kanaldan uzish", callback_data=f"disconnect_channel:{channel_id}")],
+            [
+                InlineKeyboardButton(text="🗑 Kanaldan uzish", callback_data=f"disconnect_channel:{channel_id}"),
+                InlineKeyboardButton(text="🔍 Tarixni skan qilish", callback_data=f"scan_channel:{channel_id}"),
+            ],
             [InlineKeyboardButton(text="Orqaga", callback_data="channels")],
         ]
     )
@@ -685,6 +693,106 @@ async def sync_channel_workers_handler(callback: CallbackQuery, bot: Bot):
         text += f"\n\nEslatma: {result['warning']}"
     await callback.message.answer(text)
     await render_channel_detail(callback, channel_id)
+
+
+@dp.callback_query(F.data.startswith("scan_channel:"))
+async def scan_channel_start(callback: CallbackQuery, state: FSMContext):
+    if not await check_owner(callback):
+        return
+    channel_id = int(callback.data.split(":", 1)[1])
+    async with get_session() as session:
+        channel = await session.get(Channel, channel_id)
+        if not channel:
+            await callback.answer("Chat topilmadi.", show_alert=True)
+            return
+            
+    await state.clear()
+    await state.update_data(channel_db_id=channel.id, telegram_chat_id=channel.channel_id)
+    
+    await callback.message.edit_text(
+        f"<b>{channel.title}</b> kanalini skan qilish.\n\n"
+        "Iltimos, kanalning <b>eng oxirgi xabarini</b> botga forward qiling yoki uning linkini (yoki ID sini) yuboring.\n"
+        "Shu xabardan boshlab orqaga qarab skan qilamiz.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Bekor qilish", callback_data=f"channel:{channel.id}")]])
+    )
+    await state.set_state(ScanStates.waiting_for_reference)
+
+
+@dp.message(ScanStates.waiting_for_reference)
+async def scan_channel_get_ref(message: types.Message, state: FSMContext, bot: Bot):
+    if not await check_owner(message):
+        return
+        
+    data = await state.get_data()
+    telegram_chat_id = data.get("telegram_chat_id")
+    msg_id = None
+    
+    if message.forward_origin and message.forward_origin.type == "channel":
+        if message.forward_origin.chat.id == telegram_chat_id:
+            msg_id = message.forward_origin.message_id
+    elif message.forward_from_chat and message.forward_from_chat.type == "channel":
+        if message.forward_from_chat.id == telegram_chat_id:
+            msg_id = getattr(message, "forward_from_message_id", None)
+            
+    if not msg_id and message.text:
+        import re
+        match = re.search(r"t\.me/(c/)?([^/]+)/(\d+)", message.text)
+        if match:
+            msg_id = int(match.group(3))
+        elif message.text.isdigit():
+            msg_id = int(message.text)
+            
+    if not msg_id:
+        await message.answer("Xabar ID sini aniqlab bo'lmadi. Yuborgan xabaringiz aynan shu kanaldan ekanligini yoki to'g'ri link berilganligini tekshiring.")
+        return
+        
+    await state.update_data(last_msg_id=msg_id)
+    await message.answer(
+        f"Oxirgi xabar ID si: {msg_id}\n\n"
+        "Endi ushbu xabardan orqaga qarab <b>nechta xabarga</b> reaksiya qo'shish kerakligini kiriting (masalan: 20, 50, 100):",
+        parse_mode="HTML"
+    )
+    await state.set_state(ScanStates.waiting_for_count)
+
+
+@dp.message(ScanStates.waiting_for_count, F.text)
+async def scan_channel_get_count(message: types.Message, state: FSMContext):
+    if not await check_owner(message):
+        return
+        
+    if not message.text.isdigit():
+        await message.answer("Iltimos, faqat raqam kiriting.")
+        return
+        
+    count = int(message.text)
+    if count <= 0 or count > 1000:
+        await message.answer("Iltimos, 1 dan 1000 gacha son kiriting.")
+        return
+        
+    data = await state.get_data()
+    channel_db_id = data.get("channel_db_id")
+    telegram_chat_id = data.get("telegram_chat_id")
+    last_msg_id = data.get("last_msg_id")
+    
+    await state.clear()
+    
+    async with get_session() as session:
+        channel = await session.get(Channel, channel_db_id)
+        if not channel or not channel.is_active:
+            await message.answer("Kanal bazada topilmadi yoki u nofaol.", reply_markup=main_menu_kb())
+            return
+            
+        await message.answer(f"Skan boshlandi! {count} ta xabar uchun reaksiyalar navbatga qo'shilmoqda...", reply_markup=main_menu_kb())
+        
+        scheduled = 0
+        for i in range(count):
+            target_id = last_msg_id - i
+            if target_id > 0:
+                await schedule_reactions(channel_db_id, telegram_chat_id, target_id)
+                scheduled += 1
+                
+        await message.answer(f"✅ Skan yakunlandi! {scheduled} ta xabar reaksiyalar navbatiga qo'shildi.")
 
 
 @dp.message(F.text == "🤖 Botlar")

@@ -1,8 +1,28 @@
+# Environment & secrets
 .env
+*.env
+
+# Python cache
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Virtual environments
 .venv/
 venv/
 env/
+
+# Telegram session strings (SENSITIVE — never commit!)
+session_string*.txt
+worker_bots/session_string*.txt
+*.session
+
+# Token files (SENSITIVE)
 created_tokens.txt
+worker_bots/created_tokens.txt
+new_recovered_tokens.txt
+recovered_tokens*.txt
+
+# Result / log files
+results.txt
+worker_bots/results.txt

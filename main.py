@@ -22,8 +22,25 @@ BASE_DIR = Path(__file__).resolve().parent
 CREATED_TOKENS_FILE = BASE_DIR / "created_tokens.txt"
 
 
+async def set_bot_commands(bot: Bot):
+    from aiogram.types import BotCommand
+    commands = [
+        BotCommand(command="start", description="Bosh menyu"),
+        BotCommand(command="help", description="Barcha buyruqlar ro'yxati"),
+        BotCommand(command="kanallar", description="Ulangan kanallar/guruhlar"),
+        BotCommand(command="botlar", description="Worker botlar ro'yxati"),
+        BotCommand(command="statistika", description="Umumiy statistika"),
+        BotCommand(command="sozlamalar", description="Default reaksiyalar"),
+        BotCommand(command="sync", description="Barcha kanallar uchun botlarni sync qilish"),
+        BotCommand(command="force_sync", description="Majburiy barcha botlarni admin qilish"),
+    ]
+    await bot.set_my_commands(commands)
+    logger.info("Bot commands registered in Telegram.")
+
+
 async def start_bot(bot: Bot):
     logger.info("Starting master bot polling...")
+    await set_bot_commands(bot)
     await dp.start_polling(bot)
 
 

@@ -99,7 +99,19 @@ def channel_detail_kb(channel_id: int, is_active: bool):
                 InlineKeyboardButton(text="Worker sync", callback_data=f"sync_channel:{channel_id}"),
             ],
             [InlineKeyboardButton(text=toggle_text, callback_data=f"toggle_channel:{channel_id}")],
+            [InlineKeyboardButton(text="🗑 Kanaldan uzish", callback_data=f"disconnect_channel:{channel_id}")],
             [InlineKeyboardButton(text="Orqaga", callback_data="channels")],
+        ]
+    )
+
+
+def disconnect_confirm_kb(channel_id: int):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Ha, uzish", callback_data=f"disconnect_confirm:{channel_id}"),
+                InlineKeyboardButton(text="❌ Yo'q, bekor", callback_data=f"channel:{channel_id}"),
+            ],
         ]
     )
 
@@ -302,6 +314,39 @@ async def cmd_start(message: types.Message, state: FSMContext):
     if not await check_owner(message):
         return
     await render_main_menu(message, state)
+
+
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    if not await check_owner(message):
+        return
+    text = (
+        "📋 <b>Barcha buyruqlar ro'yxati</b>\n\n"
+        "🏠 <b>Asosiy:</b>\n"
+        "/start — Bosh menyu\n"
+        "/help — Shu ro'yxat\n\n"
+        "📢 <b>Kanallar/Guruhlar:</b>\n"
+        "/kanallar — Ulangan kanallar ro'yxati\n"
+        "  • Yangi kanal/guruh ulash\n"
+        "  • Kanal reaksiyalarini o'zgartirish\n"
+        "  • Kanaldan uzish (o'chirish)\n"
+        "  • Pauza/Aktiv qilish\n\n"
+        "🤖 <b>Botlar:</b>\n"
+        "/botlar — Worker botlar ro'yxati\n"
+        "  • Yangi bot token qo'shish\n"
+        "  • created_tokens.txt import\n\n"
+        "⚙️ <b>Sozlamalar:</b>\n"
+        "/sozlamalar — Default reaksiyalarni ko'rish/o'zgartirish\n\n"
+        "📊 <b>Statistika:</b>\n"
+        "/statistika — Umumiy statistika\n\n"
+        "🔧 <b>Texnik buyruqlar:</b>\n"
+        "/sync — Barcha aktiv kanallar uchun botlarni sync qilish\n"
+        "/force_sync — Majburiy barcha botlarni admin qilib belgilash\n\n"
+        "💡 <b>Qo'lda reaksiya:</b>\n"
+        "Kanal postini forward qiling yoki t.me/kanal/123 link yuboring "
+        "— bot shu xabarga avtomatik reaksiya rejalashtiradi."
+    )
+    await message.answer(text, parse_mode="HTML", reply_markup=main_menu_kb())
 
 
 @dp.message(Command("sync"))
@@ -569,6 +614,62 @@ async def toggle_channel(callback: CallbackQuery):
     await render_channel_detail(callback, channel_id)
 
 
+@dp.callback_query(F.data.startswith("disconnect_channel:"))
+async def disconnect_channel_ask(callback: CallbackQuery):
+    if not await check_owner(callback):
+        return
+    channel_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        channel = await session.get(Channel, channel_id)
+        if channel is None:
+            await callback.answer("Chat topilmadi.", show_alert=True)
+            return
+        channel_title = channel.title
+
+    await callback.message.edit_text(
+        f"⚠️ Rostdan ham <b>{channel_title}</b> kanalini tizimdan uzmoqchimisiz?\n\n"
+        "Bu kanal va unga bog'liq barcha worker ulanishlar o'chirilib, "
+        "boshqa reaksiyalar rejalanmaydi.",
+        reply_markup=disconnect_confirm_kb(channel_id),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("disconnect_confirm:"))
+async def disconnect_channel_confirm(callback: CallbackQuery):
+    if not await check_owner(callback):
+        return
+    channel_id = int(callback.data.split(":", 1)[1])
+
+    async with get_session() as session:
+        channel = await session.get(Channel, channel_id)
+        if channel is None:
+            await callback.answer("Chat topilmadi.", show_alert=True)
+            return
+        channel_title = channel.title
+        # ChannelWorker yozuvlarini o'chirish (CASCADE bo'lmasa qo'lda)
+        from sqlalchemy import delete as sa_delete
+        await session.execute(
+            sa_delete(ChannelWorker).where(ChannelWorker.channel_id == channel_id)
+        )
+        await session.delete(channel)
+
+    # Kanallar ro'yxatini yangilab ko'rsatish
+    async with get_session() as session:
+        channels = (
+            await session.execute(select(Channel).order_by(Channel.is_active.desc(), Channel.id.desc()))
+        ).scalars().all()
+
+    await callback.answer(f"✅ '{channel_title}' tizimdan uzildi.", show_alert=True)
+    await callback.message.edit_text(
+        f"✅ <b>{channel_title}</b> muvaffaqiyatli tizimdan uzildi.\n\nUlangan chatlar ro'yxati:",
+        reply_markup=channels_menu_kb(channels),
+        parse_mode="HTML",
+    )
+
+
 @dp.callback_query(F.data.startswith("sync_channel:"))
 async def sync_channel_workers_handler(callback: CallbackQuery, bot: Bot):
     if not await check_owner(callback):
@@ -665,7 +766,7 @@ async def import_created_tokens(message: types.Message, bot: Bot):
     asyncio.create_task(
         process_bulk_import_from_file(
             master_bot=bot,
-            owner_id=callback.from_user.id,
+            owner_id=message.from_user.id,
             file_path=CREATED_TOKENS_FILE,
             status_message=status_msg,
         )

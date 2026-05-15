@@ -8,7 +8,7 @@ from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import ReactionTypeCustomEmoji, ReactionTypeEmoji
 from sqlalchemy.orm import selectinload
 
-from bot_registry import DEFAULT_REACTIONS
+from bot_registry import DEFAULT_REACTIONS, parse_reactions_text
 from database import get_session
 from sqlalchemy import select
 from models import Channel, TaskLog, Worker, ChannelWorker
@@ -36,6 +36,38 @@ def _build_reaction_object(emoji_value: str):
     if _is_custom_emoji_id(emoji_value):
         return ReactionTypeCustomEmoji(type="custom_emoji", custom_emoji_id=emoji_value.strip())
     return ReactionTypeEmoji(type="emoji", emoji=emoji_value)
+
+
+def _sanitize_emoji_list(raw_list: list[str] | None) -> list[str]:
+    """Bazadan kelgan emoji ro'yxatini tozalaydi.
+    
+    Ba'zan bazada ['\u2764\ud83d\udc4d\ud83d\udd25...'] kabi bitta katta
+    string saqlanib qolishi mumkin. Buni to'g'ri alohida emojilarga ajratadi.
+    """
+    if not raw_list:
+        return DEFAULT_REACTIONS.copy()
+    
+    result: list[str] = []
+    for item in raw_list:
+        item = str(item).strip()
+        if not item:
+            continue
+        # Agar bu bitta qisqa emoji yoki custom ID bo'lsa — to'g'ridan qo'sh
+        # Bitta emoji odatda 1-4 Unicode codepoint (❤=1, ❤️‍🔥=4, 👍=1 ...)
+        # Ko'p emoji birga yozilsa uzunroq bo'ladi
+        if _is_custom_emoji_id(item):
+            result.append(item)
+        elif len(item) <= 5:  # bitta emoji: max 4-5 codepoint (ZWJ sequences)
+            result.append(item)
+        else:
+            # Uzun string — parse qilishga harakat qil
+            parsed = parse_reactions_text(item)
+            if parsed:
+                result.extend(parsed)
+            else:
+                result.append(item)  # fallback
+    
+    return result if result else DEFAULT_REACTIONS.copy()
 
 
 def _build_reaction_plan(available_emojis: list[str], worker_count: int) -> list[str]:
@@ -212,7 +244,9 @@ async def schedule_reactions(channel_db_id: int, telegram_channel_id: int, messa
         )
         admin_worker_ids = (await session.execute(cw_stmt)).scalars().all()
 
-        available_emojis = (channel.reactions or []) or DEFAULT_REACTIONS.copy()
+        raw_emojis = channel.reactions or []
+        available_emojis = _sanitize_emoji_list(raw_emojis)
+        
         active_workers: List[Worker] = [
             worker for worker in channel.workers
             if worker.is_active and worker.id in admin_worker_ids
@@ -226,11 +260,12 @@ async def schedule_reactions(channel_db_id: int, telegram_channel_id: int, messa
 
         premium_count = sum(1 for e in available_emojis if _is_custom_emoji_id(e))
         logger.info(
-            "Scheduling %s reactions (%s premium) for chat %s message %s.",
+            "Scheduling %s reactions (%s premium) for chat %s message %s. Emojis: %s",
             len(active_workers),
             premium_count,
             telegram_channel_id,
             message_id,
+            available_emojis[:5],
         )
 
         for worker, selected_emoji in zip(active_workers, reaction_plan, strict=False):

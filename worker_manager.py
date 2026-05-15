@@ -8,7 +8,7 @@ from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import ReactionTypeCustomEmoji, ReactionTypeEmoji
 from sqlalchemy.orm import selectinload
 
-from bot_registry import DEFAULT_REACTIONS, parse_reactions_text
+from bot_registry import DEFAULT_REACTIONS, parse_reactions_text, _split_emoji_string
 from database import get_session
 from sqlalchemy import select
 from models import Channel, TaskLog, Worker, ChannelWorker
@@ -41,7 +41,7 @@ def _build_reaction_object(emoji_value: str):
 def _sanitize_emoji_list(raw_list: list[str] | None) -> list[str]:
     """Bazadan kelgan emoji ro'yxatini tozalaydi.
     
-    Ba'zan bazada ['\u2764\ud83d\udc4d\ud83d\udd25...'] kabi bitta katta
+    Ba'zan bazada ['❤👍🔥...'] kabi bitta katta
     string saqlanib qolishi mumkin. Buni to'g'ri alohida emojilarga ajratadi.
     """
     if not raw_list:
@@ -52,20 +52,21 @@ def _sanitize_emoji_list(raw_list: list[str] | None) -> list[str]:
         item = str(item).strip()
         if not item:
             continue
-        # Agar bu bitta qisqa emoji yoki custom ID bo'lsa — to'g'ridan qo'sh
-        # Bitta emoji odatda 1-4 Unicode codepoint (❤=1, ❤️‍🔥=4, 👍=1 ...)
-        # Ko'p emoji birga yozilsa uzunroq bo'ladi
+        # Custom emoji ID — to'g'ridan qo'sh
         if _is_custom_emoji_id(item):
             result.append(item)
-        elif len(item) <= 5:  # bitta emoji: max 4-5 codepoint (ZWJ sequences)
+            continue
+        # Bitta qisqa emoji (1-5 codepoint)
+        if len(item) <= 5:
             result.append(item)
+            continue
+        # Uzun string — emoji library bilan ajrat
+        parts = _split_emoji_string(item)
+        if parts:
+            logger.info("Sanitized emoji string '%s' → %s", item[:20], parts)
+            result.extend(parts)
         else:
-            # Uzun string — parse qilishga harakat qil
-            parsed = parse_reactions_text(item)
-            if parsed:
-                result.extend(parsed)
-            else:
-                result.append(item)  # fallback
+            result.append(item)  # fallback
     
     return result if result else DEFAULT_REACTIONS.copy()
 

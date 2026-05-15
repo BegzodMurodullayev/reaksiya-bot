@@ -7,6 +7,12 @@ import re
 from pathlib import Path
 from typing import Any
 
+try:
+    import emoji as emoji_lib
+    _EMOJI_LIB_AVAILABLE = True
+except ImportError:
+    _EMOJI_LIB_AVAILABLE = False
+
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
 from sqlalchemy import select
@@ -103,21 +109,72 @@ async def inspect_target_chat(master_bot: Bot, chat_id: int) -> dict[str, Any]:
     }
 
 
+def _split_emoji_string(text: str) -> list[str]:
+    """Bo'sh joysiz yozilgan emoji stringni alohida emojilarga ajratadi.
+    
+    Masalan: '❤👍🔥' → ['❤', '👍', '🔥']
+    emoji library mavjud bo'lsa ishlatadi, aks holda fallback.
+    """
+    if _EMOJI_LIB_AVAILABLE:
+        found = emoji_lib.emoji_list(text)
+        if found:
+            return [e['emoji'] for e in found]
+    # Fallback: har bir unicode codepoint ni tekshir
+    result = []
+    i = 0
+    chars = list(text)
+    while i < len(chars):
+        # ZWJ sequence yoki variation selector ni tekshir
+        ch = chars[i]
+        cluster = ch
+        j = i + 1
+        while j < len(chars):
+            next_ch = chars[j]
+            cp = ord(next_ch)
+            # ZWJ (U+200D), variation selector, combining enclosing keycap
+            if cp in (0x200D, 0xFE0F, 0xFE0E, 0x20E3) or (0x1F3FB <= cp <= 0x1F3FF):
+                cluster += next_ch
+                j += 1
+            elif j + 1 < len(chars) and ord(next_ch) == 0x200D:
+                cluster += next_ch
+                j += 1
+            else:
+                break
+        result.append(cluster)
+        i = j
+    return [r for r in result if r.strip()]
+
+
 def parse_reactions_text(raw_text: str | None) -> list[str]:
     """Reaksiyalarni parse qiladi.
 
     Qo'llab-quvvatlanadigan formatlar:
-    - Oddiy emoji: ❤ 👍 🔥
-    - Premium custom emoji ID: 5368324170671202286 (Telegram dan olingan uzun raqam)
+    - Oddiy emoji (bo'sh joy bilan): ❤ 👍 🔥
+    - Bo'sh joysiz ketma-ket: ❤👍🔥  (avtomatik ajratiladi)
+    - Premium custom emoji ID: 5368324170671202286
     - Aralash: 👍 5368324170671202286 🔥
     """
     if not raw_text:
         return []
     reactions: list[str] = []
-    for item in raw_text.replace(",", " ").split():
-        emoji = item.strip()
-        if emoji and emoji not in reactions:
-            reactions.append(emoji)
+    for token in raw_text.replace(",", " ").split():
+        token = token.strip()
+        if not token:
+            continue
+        # Custom emoji ID (uzun raqam) — to'g'ridan qo'sh
+        if token.isdigit() and len(token) > 10:
+            if token not in reactions:
+                reactions.append(token)
+            continue
+        # Bitta qisqa token (1-5 char) — to'g'ridan qo'sh
+        if len(token) <= 5:
+            if token not in reactions:
+                reactions.append(token)
+            continue
+        # Uzun token — ichidagi emojilarga ajrat
+        for em in _split_emoji_string(token):
+            if em and em not in reactions:
+                reactions.append(em)
     return reactions
 
 

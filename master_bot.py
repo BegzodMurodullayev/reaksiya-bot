@@ -838,45 +838,56 @@ async def handle_private_manual_reaction(message: types.Message, bot: Bot):
     if not await check_owner(message):
         return
         
-    chat_id = None
-    message_id = None
+    targets = []
     
     # 1. Forward tekshiruvi
     if message.forward_origin and message.forward_origin.type == "channel":
-        chat_id = message.forward_origin.chat.id
-        message_id = message.forward_origin.message_id
+        targets.append((message.forward_origin.chat.id, message.forward_origin.message_id))
     elif message.forward_from_chat and message.forward_from_chat.type == "channel":
-        chat_id = message.forward_from_chat.id
-        message_id = getattr(message, "forward_from_message_id", None)
+        msg_id = getattr(message, "forward_from_message_id", None)
+        if msg_id:
+            targets.append((message.forward_from_chat.id, msg_id))
     
     # 2. Matn ichidan link izlash (https://t.me/kanal_nomi/123 yoki t.me/c/123/456)
-    if not chat_id and message.text:
+    if message.text:
         import re
-        match = re.search(r"t\.me/(c/)?([^/]+)/(\d+)", message.text)
-        if match:
+        # Barcha linklarni topish
+        matches = re.finditer(r"t\.me/(c/)?([^/\s]+)/(\d+)", message.text)
+        for match in matches:
             is_private_c = match.group(1)
             chat_ref = match.group(2)
-            message_id = int(match.group(3))
+            msg_id = int(match.group(3))
             
             if is_private_c:
-                chat_id = int(f"-100{chat_ref}")
+                cid = int(f"-100{chat_ref}")
+                targets.append((cid, msg_id))
             else:
                 try:
                     chat = await bot.get_chat(f"@{chat_ref}")
-                    chat_id = chat.id
+                    targets.append((chat.id, msg_id))
                 except Exception:
-                    await message.answer("Bunday kanal topilmadi. Kanal @username si to'g'riligiga ishonch hosil qiling.")
-                    return
+                    await message.answer(f"@{chat_ref} kanali topilmadi.")
+                    continue
 
-    if chat_id and message_id:
-        async with get_session() as session:
+    if not targets:
+        return
+
+    # Takroriy linklarni olib tashlash
+    targets = list(set(targets))
+    scheduled_count = 0
+    
+    async with get_session() as session:
+        for cid, mid in targets:
             channel = (await session.execute(
-                select(Channel).where(Channel.channel_id == chat_id)
+                select(Channel).where(Channel.channel_id == cid)
             )).scalar_one_or_none()
             
             if not channel or not channel.is_active:
-                await message.answer("Bu kanal bazada yo'q yoki aktiv emas. Oldin kanalni ulab qo'ying.")
-                return
+                await message.answer(f"Ushbu kanal bazada yo'q yoki aktiv emas (ID: {cid}).")
+                continue
                 
-            await schedule_reactions(channel.id, chat_id, message_id)
-            await message.answer(f"✅ Ushbu xabarga (ID: {message_id}) reaksiyalar rejalashtirildi!")
+            await schedule_reactions(channel.id, cid, mid)
+            scheduled_count += 1
+            
+    if scheduled_count > 0:
+        await message.answer(f"✅ {scheduled_count} ta xabarga reaksiyalar rejalashtirildi!")

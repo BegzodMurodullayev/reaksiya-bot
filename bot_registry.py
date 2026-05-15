@@ -23,7 +23,7 @@ DEFAULT_REACTIONS = [
     "🎉",
     "🤩",
     "👌",
-    "❤‍🔥",
+    "❤\ufe0f\u200d🔥",  # ❤️‍🔥 correct ZWJ sequence (U+2764 + U+FE0F + ZWJ + U+1F525)
     "💯",
     "⚡",
     "🏆",
@@ -104,6 +104,13 @@ async def inspect_target_chat(master_bot: Bot, chat_id: int) -> dict[str, Any]:
 
 
 def parse_reactions_text(raw_text: str | None) -> list[str]:
+    """Reaksiyalarni parse qiladi.
+
+    Qo'llab-quvvatlanadigan formatlar:
+    - Oddiy emoji: ❤ 👍 🔥
+    - Premium custom emoji ID: 5368324170671202286 (Telegram dan olingan uzun raqam)
+    - Aralash: 👍 5368324170671202286 🔥
+    """
     if not raw_text:
         return []
     reactions: list[str] = []

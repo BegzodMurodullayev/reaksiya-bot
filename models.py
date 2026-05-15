@@ -84,7 +84,7 @@ class TaskLog(Base):
         ForeignKey("workers.id", ondelete="SET NULL"),
         nullable=True,
     )
-    reaction_emoji: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    reaction_emoji: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

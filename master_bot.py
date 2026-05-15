@@ -479,7 +479,10 @@ async def process_channel_reference(message: types.Message, state: FSMContext, b
     await message.answer(
         f"Chat topildi: {chat_info['title']} ({chat_info['chat_id']})\n\n"
         "Endi reaksiyalarni yuboring.\n"
-        "Masalan: ❤ 👍 🔥 👏 🎉 🤩 👌 ❤‍🔥 💯 ⚡ 🏆\n"
+        "Masalan: ❤ 👍 🔥 👏 🎉 🤩 👌 ❤\u200d🔥 💯 ⚡ 🏆\n\n"
+        "⭐ Premium reaksiya qo'shish uchun custom emoji ID sini yuboring:\n"
+        "Masalan: 5368324170671202286 (Telegram dan olingan uzun raqam)\n"
+        "Aralash ham bo'ladi: 👍 5368324170671202286 🔥\n\n"
         "Bo'sh qoldirmoqchi bo'lsangiz `default` deb yuboring."
         f"\n\nHozirgi default: {' '.join(default_reactions)}"
     )
@@ -517,7 +520,11 @@ async def edit_channel_reactions_start(callback: CallbackQuery, state: FSMContex
     await state.clear()
     await state.update_data(channel_id=channel_id)
     await callback.message.edit_text(
-        "Yangi reaksiyalarni yuboring.\nMasalan: ❤ 👍 🔥 👏 🎉"
+        "Yangi reaksiyalarni yuboring.\n"
+        "Masalan: ❤ 👍 🔥 👏 🎉\n\n"
+        "⭐ Premium reaksiya uchun custom emoji ID yuboring:\n"
+        "Masalan: 5368324170671202286\n"
+        "Aralash ham bo'ladi: 👍 5368324170671202286 🔥"
     )
     await state.set_state(EditStates.waiting_for_channel_reactions)
 
@@ -688,7 +695,11 @@ async def edit_default_reactions_start(message: types.Message, state: FSMContext
         return
     await state.clear()
     await message.answer(
-        "Yangi default reaksiyalarni yuboring.\nMasalan: ❤ 👍 🔥 👏 🎉 🤩",
+        "Yangi default reaksiyalarni yuboring.\n"
+        "Masalan: ❤ 👍 🔥 👏 🎉 🤩\n\n"
+        "⭐ Premium reaksiya uchun custom emoji ID yuboring:\n"
+        "Masalan: 5368324170671202286\n"
+        "Aralash ham bo'ladi: 👍 5368324170671202286 🔥",
         reply_markup=ReplyKeyboardRemove()
     )
     await state.set_state(EditStates.waiting_for_default_reactions)

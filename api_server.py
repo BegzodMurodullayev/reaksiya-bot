@@ -14,6 +14,11 @@ templates_dir = os.path.join(os.path.dirname(__file__), "templates")
 os.makedirs(templates_dir, exist_ok=True)
 templates = Jinja2Templates(directory=templates_dir)
 
+@app.get("/ping")
+async def ping():
+    """Super lightweight ping endpoint to keep Render awake without touching the DB."""
+    return {"ping": "pong"}
+
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health_check():
     """Endpoint for UptimeRobot to ping."""

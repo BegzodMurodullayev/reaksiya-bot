@@ -40,10 +40,12 @@ class Settings(BaseSettings):
     SEED_WORKERS: str = ""
 
     # DB Pool settings optimized for Render free tier
-    DB_POOL_SIZE: int = 15
-    DB_MAX_OVERFLOW: int = 20
+    # pool_recycle=300 — Render/Supabase 5 daqiqada idle connectionni uzadi,
+    # shuning uchun 300s dan katta bo'lmasligi kerak.
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 15
     DB_POOL_TIMEOUT: int = 30
-    DB_POOL_RECYCLE: int = 1800  # 30 min — prevent stale connections
+    DB_POOL_RECYCLE: int = 300  # 5 min — Render idle timeout dan past
 
 
 settings = Settings()

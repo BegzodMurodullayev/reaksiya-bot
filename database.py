@@ -1,4 +1,5 @@
 """Async SQLAlchemy engine and session helpers."""
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -11,6 +12,16 @@ from sqlalchemy.orm import DeclarativeBase
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+# Transient connection errors that warrant an automatic retry
+_TRANSIENT_DB_ERRORS = (
+    "connection was closed in the middle of operation",
+    "connection is closed",
+    "ssl connection has been closed unexpectedly",
+    "server closed the connection unexpectedly",
+    "lost connection",
+    "connection does not exist",
+)
 
 
 class Base(DeclarativeBase):
@@ -56,7 +67,8 @@ engine = create_async_engine(
     max_overflow=settings.DB_MAX_OVERFLOW,
     pool_timeout=settings.DB_POOL_TIMEOUT,
     pool_recycle=settings.DB_POOL_RECYCLE,
-    pool_pre_ping=True,
+    pool_pre_ping=True,          # har ping da sog'lom connection tekshiriladi
+    pool_reset_on_return="rollback",  # connection qaytganda clean state
     connect_args=CONNECT_ARGS,
     echo=False,
 )
@@ -72,12 +84,29 @@ async_session_factory = async_sessionmaker(
 
 @asynccontextmanager
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    async with async_session_factory() as session:
+    """Session context manager with automatic retry on transient connection errors."""
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
         try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
+            async with async_session_factory() as session:
+                try:
+                    yield session
+                    await session.commit()
+                    return
+                except Exception:
+                    await session.rollback()
+                    raise
+        except Exception as exc:
+            err_lower = str(exc).lower()
+            is_transient = any(marker in err_lower for marker in _TRANSIENT_DB_ERRORS)
+            if is_transient and attempt < max_attempts:
+                wait = 2 ** attempt
+                logger.warning(
+                    "Transient DB connection error (attempt %d/%d), retrying in %ds: %s",
+                    attempt, max_attempts, wait, exc,
+                )
+                await asyncio.sleep(wait)
+                continue
             raise
 
 

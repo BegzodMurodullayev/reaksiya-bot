@@ -191,11 +191,17 @@ async def execute_reaction_task(
                 )
                 break
 
-            if "message_id_invalid" not in error_text and "chat not found" not in error_text:
+            if any(marker in error_text for marker in ("message to react not found", "message_id_invalid", "chat not found", "message not found")):
                 logger.warning(
-                    "Worker %s failed to react on message %s (attempt %s): %s",
-                    worker_id, message_id, attempt, exc,
+                    "Worker %s: Message %s or Chat %s not found. Skipping retries.",
+                    worker_id, message_id, channel_id,
                 )
+                break
+
+            logger.warning(
+                "Worker %s failed to react on message %s (attempt %s): %s",
+                worker_id, message_id, attempt, exc,
+            )
 
             if any(marker in error_text for marker in ("unauthorized", "invalid token", "token is invalid")):
                 invalid_token = True

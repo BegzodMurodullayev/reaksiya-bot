@@ -15,6 +15,30 @@ from models import Channel, TaskLog, Worker, ChannelWorker
 
 logger = logging.getLogger(__name__)
 
+# ── Bot sessiya keshi ────────────────────────────────────────────────
+# Har reaksiyada yangi Bot() ochish sekin. Kesh orqali sessiyani qayta ishlatamiz.
+_bot_cache: dict[str, Bot] = {}
+_bot_cache_lock = asyncio.Lock()
+
+async def _get_bot(token: str) -> Bot:
+    """Token bo'yicha Bot sessiyasini keshdan oladi yoki yangi ochadi."""
+    async with _bot_cache_lock:
+        bot = _bot_cache.get(token)
+        if bot is None:
+            bot = Bot(token=token)
+            _bot_cache[token] = bot
+        return bot
+
+async def close_all_bots() -> None:
+    """Dastur yopilganda barcha kesh sessiyalarini yopadi."""
+    async with _bot_cache_lock:
+        for bot in _bot_cache.values():
+            try:
+                await bot.session.close()
+            except Exception:
+                pass
+        _bot_cache.clear()
+
 
 def _is_custom_emoji_id(value: str) -> bool:
     """Premium emoji ID larini aniqlash.
@@ -97,7 +121,8 @@ async def execute_reaction_task(
     task_log_id: int,
     channel_db_id: int | None = None,
 ):
-    delay = random.uniform(2, 3)
+    # 0.3-1.0s tasodifiy kechikish — tabiiy ko'rinadi, lekin juda tez
+    delay = random.uniform(0.3, 1.0)
     reaction_type = "premium ⭐" if _is_custom_emoji_id(reaction_emoji) else "oddiy"
     logger.info(
         "Worker %s waiting %.2fs before reacting [%s] %s on msg %s in chat %s.",
@@ -110,7 +135,8 @@ async def execute_reaction_task(
     )
     await asyncio.sleep(delay)
 
-    bot = Bot(token=bot_token)
+    # Keshdan Bot sessiyasini olamiz (yangi ochmaymiz)
+    bot = await _get_bot(bot_token)
     max_retries = 3
     success = False
     invalid_token = False
@@ -118,74 +144,73 @@ async def execute_reaction_task(
     reaction_invalid = False
     attempts_used = 0
 
-    try:
-        for attempt in range(1, max_retries + 1):
-            attempts_used = attempt
-            try:
-                await bot.set_message_reaction(
-                    chat_id=channel_id,
-                    message_id=message_id,
-                    reaction=[_build_reaction_object(reaction_emoji)],
-                )
-                success = True
-                logger.info(
-                    "Worker %s successfully reacted [%s] %s on message %s.",
-                    worker_id,
-                    reaction_type,
-                    reaction_emoji,
-                    message_id,
+    for attempt in range(1, max_retries + 1):
+        attempts_used = attempt
+        try:
+            await bot.set_message_reaction(
+                chat_id=channel_id,
+                message_id=message_id,
+                reaction=[_build_reaction_object(reaction_emoji)],
+            )
+            success = True
+            logger.info(
+                "Worker %s successfully reacted [%s] %s on message %s.",
+                worker_id,
+                reaction_type,
+                reaction_emoji,
+                message_id,
+            )
+            break
+        except TelegramRetryAfter as exc:
+            wait_seconds = getattr(exc, "retry_after", 1) or 1
+            logger.warning(
+                "Worker %s hit flood control on message %s, retrying in %ss.",
+                worker_id,
+                message_id,
+                wait_seconds,
+            )
+            await asyncio.sleep(wait_seconds)
+        except Exception as exc:
+            error_text = str(exc).lower()
+
+            # Non-retryable: invalid emoji
+            if "reaction_invalid" in error_text:
+                reaction_invalid = True
+                logger.warning(
+                    "Worker %s: REACTION_INVALID for emoji '%s' on msg %s — skipping retries.",
+                    worker_id, reaction_emoji, message_id,
                 )
                 break
-            except TelegramRetryAfter as exc:
-                wait_seconds = getattr(exc, "retry_after", 1) or 1
+
+            # Non-retryable: bot kicked
+            if "forbidden" in error_text and ("kicked" in error_text or "bot was blocked" in error_text):
+                kicked_from_chat = True
                 logger.warning(
-                    "Worker %s hit flood control on message %s, retrying in %ss.",
-                    worker_id,
-                    message_id,
-                    wait_seconds,
+                    "Worker %s was kicked from chat %s — marking as non-admin.",
+                    worker_id, channel_id,
                 )
-                await asyncio.sleep(wait_seconds)
-            except Exception as exc:
-                error_text = str(exc).lower()
+                break
 
-                # Non-retryable: invalid emoji — will never succeed, skip immediately
-                if "reaction_invalid" in error_text:
-                    reaction_invalid = True
-                    logger.warning(
-                        "Worker %s: REACTION_INVALID for emoji '%s' on msg %s — skipping retries.",
-                        worker_id,
-                        reaction_emoji,
-                        message_id,
-                    )
-                    break
+            if "message_id_invalid" not in error_text and "chat not found" not in error_text:
+                logger.warning(
+                    "Worker %s failed to react on message %s (attempt %s): %s",
+                    worker_id, message_id, attempt, exc,
+                )
 
-                # Non-retryable: bot was kicked from the channel
-                if "forbidden" in error_text and ("kicked" in error_text or "bot was blocked" in error_text):
-                    kicked_from_chat = True
-                    logger.warning(
-                        "Worker %s was kicked from chat %s — marking as non-admin.",
-                        worker_id,
-                        channel_id,
-                    )
-                    break
+            if any(marker in error_text for marker in ("unauthorized", "invalid token", "token is invalid")):
+                invalid_token = True
+                # Bu token yaroqsiz — keshdan o'chir
+                async with _bot_cache_lock:
+                    bad_bot = _bot_cache.pop(bot_token, None)
+                    if bad_bot:
+                        try:
+                            await bad_bot.session.close()
+                        except Exception:
+                            pass
+                break
 
-                if "message_id_invalid" not in error_text and "chat not found" not in error_text:
-                    logger.warning(
-                        "Worker %s failed to react on message %s (attempt %s): %s",
-                        worker_id,
-                        message_id,
-                        attempt,
-                        exc,
-                    )
-
-                if any(marker in error_text for marker in ("unauthorized", "invalid token", "token is invalid")):
-                    invalid_token = True
-                    break
-
-                if attempt < max_retries:
-                    await asyncio.sleep(2 ** attempt)
-    finally:
-        await bot.session.close()
+            if attempt < max_retries:
+                await asyncio.sleep(1)  # tez retry: 1s (avval 2**attempt edi)
 
     async with get_session() as session:
         task_log = await session.get(TaskLog, task_log_id)
@@ -248,13 +273,21 @@ async def schedule_reactions(channel_db_id: int, telegram_channel_id: int, messa
         raw_emojis = channel.reactions or []
         available_emojis = _sanitize_emoji_list(raw_emojis)
         
+        # Tekshiramiz: qaysi workerlar bu xabarga oldin muvaffaqiyatli reaksiya bosgan
+        existing_stmt = select(TaskLog.worker_id).where(
+            TaskLog.channel_id == channel_db_id,
+            TaskLog.message_id == message_id,
+            TaskLog.status == "success"
+        )
+        already_reacted_worker_ids = set((await session.execute(existing_stmt)).scalars().all())
+
         active_workers: List[Worker] = [
             worker for worker in channel.workers
-            if worker.is_active and worker.id in admin_worker_ids
+            if worker.is_active and worker.id in admin_worker_ids and worker.id not in already_reacted_worker_ids
         ]
 
         if not active_workers:
-            logger.info("No active workers found for chat %s.", telegram_channel_id)
+            logger.info("No new active workers needed for chat %s message %s (all have reacted or none available).", telegram_channel_id, message_id)
             return
 
         reaction_plan = _build_reaction_plan(available_emojis, len(active_workers))
@@ -269,6 +302,8 @@ async def schedule_reactions(channel_db_id: int, telegram_channel_id: int, messa
             available_emojis[:5],
         )
 
+        # Barcha task_log larni bitta flush bilan saqlaymiz (tez)
+        task_logs: list[TaskLog] = []
         for worker, selected_emoji in zip(active_workers, reaction_plan, strict=False):
             task_log = TaskLog(
                 channel_id=channel_db_id,
@@ -278,8 +313,12 @@ async def schedule_reactions(channel_db_id: int, telegram_channel_id: int, messa
                 status="pending",
             )
             session.add(task_log)
-            await session.flush()
+            task_logs.append((worker, selected_emoji, task_log))
 
+        # Bir marta flush — barcha IDlar tayyor bo'ladi
+        await session.flush()
+
+        for worker, selected_emoji, task_log in task_logs:
             asyncio.create_task(
                 execute_reaction_task(
                     worker_id=worker.id,

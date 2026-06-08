@@ -48,7 +48,7 @@ async def process_bulk_import(
         failed_count = 0
         duplicate_count = 0
         promoted_count = 0
-        semaphore = asyncio.Semaphore(3)
+        semaphore = asyncio.Semaphore(15)
 
         async def check_and_add_token(token: str):
             nonlocal success_count, failed_count, duplicate_count, promoted_count

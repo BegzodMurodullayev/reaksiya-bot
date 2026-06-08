@@ -330,51 +330,52 @@ async def register_worker(master_bot: Bot, token: str) -> dict[str, Any]:
         worker_id = worker.id
         chat_refs = [(chat.id, chat.channel_id, chat.title) for chat in chats]
 
-    promoted_count = 0
-    pending_titles: list[str] = []
-    skipped_titles: list[str] = []
-    for chat_db_id, telegram_chat_id, title in chat_refs:
-        chat_info = await inspect_target_chat(master_bot, telegram_chat_id)
-        if not chat_info["ok"]:
-            skipped_titles.append(f"{title}: {chat_info['reason']}")
-            continue
-        if not chat_info["promotion_supported"]:
-            skipped_titles.append(f"{title}: {chat_info['warning']}")
-            continue
+    async def check_chat(chat_db_id: int, telegram_chat_id: int, title: str):
+        try:
+            chat_info = await inspect_target_chat(master_bot, telegram_chat_id)
+            if not chat_info["ok"]:
+                return {"status": "skipped", "reason": f"{title}: {chat_info['reason']}"}
+            if not chat_info["promotion_supported"]:
+                return {"status": "skipped", "reason": f"{title}: {chat_info['warning']}"}
 
-        worker_is_member, membership_status = await _check_worker_membership(
-            master_bot,
-            telegram_chat_id,
-            worker_user_id,
-        )
-        if not worker_is_member:
-            pending_titles.append(title)
-            continue
+            worker_is_member, membership_status = await _check_worker_membership(
+                master_bot,
+                telegram_chat_id,
+                worker_user_id,
+            )
+            if not worker_is_member:
+                return {"status": "pending", "title": title}
 
-        if membership_status in ("administrator", "creator"):
-            promoted = True
-            error_text = None
-        else:
-            promoted = False
-            error_text = "Qo'lda admin qilinishi kutilmoqda"
-        if promoted:
-            promoted_count += 1
-            async with get_session() as session:
-                cw = (await session.execute(
-                    select(ChannelWorker).where(
-                        ChannelWorker.channel_id == chat_db_id,
-                        ChannelWorker.worker_id == worker_id
-                    )
-                )).scalar_one_or_none()
-                if cw:
-                    cw.is_admin = True
-        elif error_text and any(
-            marker in error_text.lower()
-            for marker in ("not enough rights", "not a member", "participant", "user not found")
-        ):
-            pending_titles.append(title)
-        elif membership_note and membership_note not in ACTIVE_MEMBER_STATUSES:
-            pending_titles.append(title)
+            if membership_status in ("administrator", "creator"):
+                return {"status": "promoted", "chat_db_id": chat_db_id}
+            else:
+                return {"status": "pending", "title": title}
+        except Exception as e:
+            logger.warning("Error checking chat %s: %s", title, e)
+            return {"status": "skipped", "reason": f"{title}: {e}"}
+
+    # Parallelize all Telegram API status calls for the channels
+    results = await asyncio.gather(*[check_chat(cid, t_id, title) for cid, t_id, title in chat_refs])
+
+    promoted_chat_ids = []
+    for r in results:
+        if r["status"] == "skipped":
+            skipped_titles.append(r["reason"])
+        elif r["status"] == "pending":
+            pending_titles.append(r["title"])
+        elif r["status"] == "promoted":
+            promoted_chat_ids.append(r["chat_db_id"])
+
+    if promoted_chat_ids:
+        promoted_count = len(promoted_chat_ids)
+        async with get_session() as session:
+            from sqlalchemy import update
+            await session.execute(
+                update(ChannelWorker)
+                .where(ChannelWorker.worker_id == worker_id)
+                .where(ChannelWorker.channel_id.in_(promoted_chat_ids))
+                .values(is_admin=True)
+            )
 
     return {
         "status": status,
@@ -439,42 +440,45 @@ async def sync_workers_for_channel(master_bot: Bot, channel_db_id: int) -> dict[
             "warning": chat_info["warning"],
         }
 
-    promoted_count = 0
-    pending_usernames: list[str] = []
-    for worker in workers_for_promotion:
+    async def process_worker(w: Worker):
         try:
-            worker_user_id, username = await _fetch_worker_identity(worker.token)
+            # Parse user_id from token: 123456:ABC -> 123456
+            w_user_id = int(w.token.split(":")[0])
+            w_username = w.username
+            w_is_member, membership_status = await _check_worker_membership(
+                master_bot, telegram_chat_id, w_user_id
+            )
+            if not w_is_member:
+                return {"status": "pending", "name": f"@{w_username}" if w_username else f"id:{w.id}"}
+
+            if membership_status in ("administrator", "creator"):
+                return {"status": "promoted", "worker_id": w.id}
+            else:
+                return {"status": "pending", "name": f"@{w_username}" if w_username else f"id:{w.id}"}
         except Exception as exc:
-            logger.warning("Worker %s identity fetch failed during sync: %s", worker.id, exc)
-            continue
+            logger.warning("Worker %s membership check failed: %s", w.id, exc)
+            return {"status": "failed"}
 
-        worker_is_member, membership_status = await _check_worker_membership(master_bot, telegram_chat_id, worker_user_id)
-        if not worker_is_member:
-            pending_usernames.append(f"@{username}" if username else f"id:{worker.id}")
-            continue
+    # Process all workers concurrently
+    results = await asyncio.gather(*[process_worker(worker) for worker in workers_for_promotion])
 
-        if membership_status in ("administrator", "creator"):
-            promoted = True
-            error_text = None
-        else:
-            promoted = False
-            error_text = "Qo'lda admin qilinishi kutilmoqda"
-        if promoted:
-            promoted_count += 1
-            async with get_session() as session:
-                cw = (await session.execute(
-                    select(ChannelWorker).where(
-                        ChannelWorker.channel_id == channel_db_id,
-                        ChannelWorker.worker_id == worker.id
-                    )
-                )).scalar_one_or_none()
-                if cw:
-                    cw.is_admin = True
-        elif error_text and any(
-            marker in error_text.lower()
-            for marker in ("not enough rights", "not a member", "participant", "user not found")
-        ):
-            pending_usernames.append(f"@{username}" if username else f"id:{worker.id}")
+    promoted_worker_ids = []
+    for r in results:
+        if r["status"] == "pending":
+            pending_usernames.append(r["name"])
+        elif r["status"] == "promoted":
+            promoted_worker_ids.append(r["worker_id"])
+
+    if promoted_worker_ids:
+        promoted_count = len(promoted_worker_ids)
+        async with get_session() as session:
+            from sqlalchemy import update
+            await session.execute(
+                update(ChannelWorker)
+                .where(ChannelWorker.channel_id == channel_db_id)
+                .where(ChannelWorker.worker_id.in_(promoted_worker_ids))
+                .values(is_admin=True)
+            )
 
     return {
         "status": "ok",

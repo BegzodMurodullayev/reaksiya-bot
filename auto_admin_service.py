@@ -31,7 +31,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-DELAY_BETWEEN_BOTS = 3
+DELAY_BETWEEN_BOTS = 1
 DELAY_ON_FLOOD = 30
 
 async def promote_bot(app: Client, channel_peer, bot_username_or_id) -> dict:
